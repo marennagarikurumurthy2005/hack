@@ -50,6 +50,11 @@ class ComplaintListCreateView(APIView):
         if parse_bool(request.query_params.get("mine")) and request.user:
             filters["created_by"] = request.user.id
 
+        if has_role(request.user, {ROLE_WARD_MEMBER}):
+            user_village = getattr(request.user, "village", None)
+            if user_village and not filters.get("village"):
+                filters["village"] = user_village
+
         complaints, total = self.complaint_repository.list_complaints(filters, page, page_size)
         serialized = [serialize_value(item) for item in complaints]
         return paginated_response(serialized, page, page_size, total, message="Complaints fetched successfully.")
@@ -62,7 +67,6 @@ class ComplaintListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         validated_data = serializer.validated_data
 
-        images = [upload_image(file_obj, "complaints", field_name="images") for file_obj in request.FILES.getlist("images")]
         complaint = self.complaint_repository.create(
             {
                 "complaint_number": generate_reference("CMP"),
@@ -83,7 +87,7 @@ class ComplaintListCreateView(APIView):
                     "latitude": float(validated_data["latitude"]) if validated_data.get("latitude") is not None else None,
                     "longitude": float(validated_data["longitude"]) if validated_data.get("longitude") is not None else None,
                 },
-                "images": images,
+                "images": [],
                 "created_by": build_actor_snapshot(request.user),
                 "assigned_to": None,
                 "progress_percent": 0,
@@ -97,7 +101,7 @@ class ComplaintListCreateView(APIView):
                 "status": COMPLAINT_STATUS_OPEN,
                 "progress_percent": 0,
                 "visibility": "public",
-                "images": images,
+                "images": [],
                 "created_by": build_actor_snapshot(request.user),
             }
         )
@@ -113,11 +117,34 @@ class ComplaintDetailUpdateView(APIView):
         super().__init__(**kwargs)
         self.complaint_repository = ComplaintRepository()
 
-    def _can_view_internal_progress(self, request, complaint):
+    def _is_ward_member_for_complaint(self, request, complaint):
+        if not has_role(request.user, {ROLE_WARD_MEMBER}):
+            return False
+
+        user_village = (getattr(request.user, "village", None) or "").strip().lower()
+        user_ward_number = (getattr(request.user, "ward_number", None) or "").strip().lower()
+        complaint_location = complaint.get("location") or {}
+        complaint_village = (complaint_location.get("village") or "").strip().lower()
+        complaint_ward_number = (complaint_location.get("ward_number") or "").strip().lower()
+
+        if not user_village or not complaint_village or user_village != complaint_village:
+            return False
+
+        if user_ward_number and complaint_ward_number:
+            return user_ward_number == complaint_ward_number
+
+        return True
+
+    def _can_manage_complaint(self, request, complaint):
         if has_role(request.user, {ROLE_ADMIN}):
             return True
         assigned_to = complaint.get("assigned_to") or {}
-        return bool(request.user and assigned_to.get("id") == request.user.id)
+        if request.user and assigned_to.get("id") == request.user.id:
+            return True
+        return self._is_ward_member_for_complaint(request, complaint)
+
+    def _can_view_internal_progress(self, request, complaint):
+        return self._can_manage_complaint(request, complaint)
 
     def get(self, request, complaint_id: str):
         complaint = self.complaint_repository.find_by_id(complaint_id)
@@ -136,21 +163,30 @@ class ComplaintDetailUpdateView(APIView):
         )
 
     def patch(self, request, complaint_id: str):
-        if not has_role(request.user, {ROLE_ADMIN}):
-            raise PermissionDenied("Only admins and super admins can update complaint details.")
-
         complaint = self.complaint_repository.find_by_id(complaint_id)
         if not complaint:
             raise NotFound("Complaint was not found.")
+
+        if not self._can_manage_complaint(request, complaint):
+            raise PermissionDenied("You do not have permission to update this complaint.")
 
         serializer = ComplaintUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         updates = {}
         location_updates = {}
 
+        if not has_role(request.user, {ROLE_ADMIN}):
+            allowed_fields = {"status", "resolution_summary"}
+            invalid_fields = set(serializer.validated_data) - allowed_fields
+            if invalid_fields:
+                raise PermissionDenied("Ward members can only update complaint status or resolution notes.")
+
         for field in ("title", "category", "description", "priority", "status", "resolution_summary"):
             if field in serializer.validated_data:
                 updates[field] = serializer.validated_data[field]
+
+        if serializer.validated_data.get("status") == COMPLAINT_STATUS_RESOLVED:
+            updates.setdefault("progress_percent", 100)
 
         for field in ("village", "ward_number", "district", "state", "pincode", "address_line1", "address_line2", "landmark"):
             if field in serializer.validated_data:

@@ -179,13 +179,45 @@ class ComplaintRepository:
         if category:
             query["category"] = {"$regex": f"^{re.escape(category)}$", "$options": "i"}
         if village:
-            query["location.village"] = {"$regex": f"^{re.escape(village)}$", "$options": "i"}
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}},
+                        {"village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}},
+                    ]
+                }
+            )
         if district:
-            query["location.district"] = {"$regex": f"^{re.escape(district)}$", "$options": "i"}
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.district": {"$regex": f"^{re.escape(district)}$", "$options": "i"}},
+                        {"district": {"$regex": f"^{re.escape(district)}$", "$options": "i"}},
+                    ]
+                }
+            )
         if state:
-            query["location.state"] = {"$regex": f"^{re.escape(state)}$", "$options": "i"}
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
+                        {"state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
+                    ]
+                }
+            )
         if ward_number:
-            query["location.ward_number"] = {"$regex": f"^{re.escape(ward_number)}$", "$options": "i"}
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.ward_number": {"$regex": f"^{re.escape(ward_number)}$", "$options": "i"}},
+                        {"ward_number": {"$regex": f"^{re.escape(ward_number)}$", "$options": "i"}},
+                    ]
+                }
+            )
         if complaint_number:
             query["complaint_number"] = complaint_number
         if created_by:
@@ -232,13 +264,23 @@ class ComplaintRepository:
 
     def count_for_village(self, village: str):
         return self.collection.count_documents(
-            {"location.village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}}
+            {
+                "$or": [
+                    {"location.village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}},
+                    {"village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}},
+                ]
+            }
         )
 
     def recent_for_village(self, village: str, limit: int = 5):
         return list(
             self.collection.find(
-                {"location.village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}}
+                {
+                    "$or": [
+                        {"location.village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}},
+                        {"village": {"$regex": f"^{re.escape(village)}$", "$options": "i"}},
+                    ]
+                }
             )
             .sort("created_at", DESCENDING)
             .limit(limit)

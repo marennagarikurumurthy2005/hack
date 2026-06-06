@@ -27,11 +27,35 @@ class AnalyticsService:
     def _find_complaints(self, village: str | None = None, district: str | None = None, state: str | None = None):
         query = {}
         if village:
-            query["location.village"] = self._regex_equals(village)
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.village": self._regex_equals(village)},
+                        {"village": self._regex_equals(village)},
+                    ]
+                }
+            )
         if district:
-            query["location.district"] = self._regex_equals(district)
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.district": self._regex_equals(district)},
+                        {"district": self._regex_equals(district)},
+                    ]
+                }
+            )
         if state:
-            query["location.state"] = self._regex_equals(state)
+            query["$and"] = query.get("$and", [])
+            query["$and"].append(
+                {
+                    "$or": [
+                        {"location.state": self._regex_equals(state)},
+                        {"state": self._regex_equals(state)},
+                    ]
+                }
+            )
         return list(self.complaint_repository.collection.find(query).sort("created_at", -1))
 
     def _find_feedback(self, village: str | None = None, district: str | None = None, state: str | None = None):
