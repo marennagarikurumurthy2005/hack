@@ -6,6 +6,20 @@ from ..mongodb import ping_database
 from ..responses import api_response
 
 
+class RootHealthCheckView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return api_response(
+            data={
+                "service": "village-governance-api",
+                "status": "ok",
+            },
+            message="Village Governance API is running.",
+        )
+
+
 class HealthCheckView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]

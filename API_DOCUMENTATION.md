@@ -92,6 +92,8 @@ Application data is stored in MongoDB. Django also uses a small local SQLite dat
 - MongoDB via `pymongo`
 - JWT via `PyJWT`
 - Cloudinary via `cloudinary`
+- static serving via `WhiteNoise`
+- production serving via `Gunicorn`
 
 ## 5. Project structure
 
@@ -104,8 +106,13 @@ Application data is stored in MongoDB. Django also uses a small local SQLite dat
 - `api/views/villages.py` - village dashboards
 - `api/views/reports.py` - analytics and reports
 - `api/views/schemes.py` - government schemes
+- `api/views/uploads.py` - Cloudinary image uploads
+- `api/views/health.py` - liveness and database health checks
 - `api/services/analytics_service.py` - dashboard/report aggregation
+- `api/services/auth_service.py` - passwords, JWTs, and user snapshots
+- `api/services/media_service.py` - Cloudinary uploads
 - `api/repositories.py` - MongoDB data access
+- `build.sh`, `Procfile`, `render.yaml` - Render deployment files
 
 ## 6. Environment setup
 
@@ -129,10 +136,30 @@ Copy `.env.example` to `.env` and fill the values.
 - `DJANGO_SQLITE_NAME`
 - `CORS_ALLOW_ALL_ORIGINS`
 - `CORS_ALLOWED_ORIGINS`
+- `CSRF_TRUSTED_ORIGINS`
+- `MONGODB_SERVER_SELECTION_TIMEOUT_MS`
+- `CLOUDINARY_FOLDER`
+- `SECURE_SSL_REDIRECT`
+- `SECURE_HSTS_SECONDS`
+- `SECURE_HSTS_INCLUDE_SUBDOMAINS`
+- `SECURE_HSTS_PRELOAD`
 - `AUTO_BOOTSTRAP_BACKEND`
 - `SUPER_ADMIN_EMAIL`
 - `SUPER_ADMIN_USERNAME`
 - `SUPER_ADMIN_PASSWORD`
+
+### Render deployment variables
+
+For Render, set:
+
+- `DEBUG=False`
+- `ALLOWED_HOSTS=.onrender.com,<your-render-host>`
+- `CORS_ALLOW_ALL_ORIGINS=False`
+- `CORS_ALLOWED_ORIGINS=<your-frontend-url>`
+- `CSRF_TRUSTED_ORIGINS=<your-frontend-url>,https://<your-render-host>`
+- `MONGODB_URI=<MongoDB Atlas connection string>`
+- `MONGODB_DATABASE=<database name>`
+- Cloudinary variables listed above
 
 ## 7. Local commands
 
@@ -163,6 +190,20 @@ Only `email`, `username`, and `password` are required. Internal profile fields f
 ### Run the API
 
 - `python manage.py runserver`
+
+### Production verification
+
+- `python manage.py check --deploy`
+- `python manage.py collectstatic --no-input`
+
+### Render deployment
+
+Manual Render settings:
+
+- Build command: `bash build.sh`
+- Start command: `gunicorn village.wsgi:application --bind 0.0.0.0:$PORT`
+
+See `DEPLOY_RENDER.md` for the full Render checklist.
 
 ## 8. Authentication
 
@@ -277,6 +318,13 @@ Lists pending users.
 
 **Auth:** `admin`, `super_admin`
 
+**Query params**
+
+- `page`
+- `page_size`
+- `role`
+- `search`
+
 ### `GET /api/users/{user_id}/`
 
 Returns a user record.
@@ -303,6 +351,16 @@ Updates verification status.
 Changes user role.
 
 **Auth:** `super_admin`
+
+**Body**
+
+```json
+{
+  "role": "admin"
+}
+```
+
+Promoting a user to `super_admin` automatically marks that account as `approved`.
 
 ## 10. Projects
 
@@ -562,6 +620,23 @@ Records expenditure and automatically recalculates spent and remaining budget.
 
 Complaints remain the formal workflow for village problems and issue resolution.
 
+### Complaint status values
+
+- `open`
+- `under_review`
+- `assigned`
+- `in_progress`
+- `resolved`
+- `rejected`
+- `reopened`
+
+### Priority values
+
+- `low`
+- `medium`
+- `high`
+- `critical`
+
 ### `GET /api/complaints/`
 
 Lists complaints.
@@ -591,6 +666,49 @@ Creates a complaint.
 
 **Auth:** `citizen`, `super_admin`
 
+**Content types**
+
+- `application/json`
+- `multipart/form-data`
+
+**Fields**
+
+- `title`
+- `category`
+- `description`
+- `priority`
+- `village`
+- `ward_number` optional
+- `district`
+- `state`
+- `pincode`
+- `address_line1`
+- `address_line2` optional
+- `landmark` optional
+- `latitude` optional
+- `longitude` optional
+- `images` optional uploaded files
+
+**JSON body without images**
+
+```json
+{
+  "title": "Broken drainage near school",
+  "category": "sanitation",
+  "description": "Drainage water is overflowing near the school entrance.",
+  "priority": "high",
+  "village": "Village A",
+  "ward_number": "3",
+  "district": "Nalgonda",
+  "state": "Telangana",
+  "pincode": "508001",
+  "address_line1": "Main road near ZP school",
+  "landmark": "ZP School"
+}
+```
+
+When using images, send `multipart/form-data` and repeat the field name `images` for multiple files. Uploaded complaint images are stored in Cloudinary folder `complaints` and also copied to the initial complaint progress item.
+
 ### `GET /api/complaints/{complaint_id}/`
 
 Returns complaint detail and progress timeline.
@@ -603,11 +721,22 @@ Updates complaint detail or status.
 
 **Auth:** `admin`, `super_admin`
 
+**Body fields:** any complaint create field except `images`, plus `status` and `resolution_summary`.
+
 ### `PATCH /api/complaints/{complaint_id}/assign/`
 
 Assigns complaint to an operational user.
 
 **Auth:** `admin`, `super_admin`
+
+**Body**
+
+```json
+{
+  "assigned_to": "<user_id>",
+  "assignment_note": "Assigned to ward member for inspection."
+}
+```
 
 ### `GET /api/complaints/{complaint_id}/progress/`
 
@@ -620,6 +749,21 @@ Lists complaint progress updates.
 Adds a complaint progress update.
 
 **Auth:** assigned operational user, `admin`, `super_admin`
+
+**Content types**
+
+- `application/json`
+- `multipart/form-data`
+
+**Fields**
+
+- `message`
+- `status` optional
+- `progress_percent` optional
+- `visibility` optional, `public` or `internal`
+- `images` optional uploaded files
+
+Progress images are uploaded to Cloudinary folder `progress`.
 
 ## 16. Citizen feedback
 
@@ -708,6 +852,20 @@ Updates a feedback record.
 
 **Auth:** owner while status is `open`, or `admin`, `super_admin`
 
+**Content types**
+
+- `application/json`
+- `multipart/form-data`
+
+**Body fields**
+
+- `subject` optional
+- `message` optional
+- `category` optional
+- `status` optional
+- `is_public` optional
+- `images` optional uploaded files, replaces images when supplied
+
 ### `POST /api/feedback/{feedback_id}/respond/`
 
 Stores the administration response and status.
@@ -725,17 +883,80 @@ Stores the administration response and status.
 
 ## 17. Schemes
 
+### Scheme status values
+
+- `draft`
+- `published`
+- `archived`
+
 ### `GET /api/schemes/`
 
 Lists schemes.
 
 **Auth:** Public for published schemes
 
+**Query params**
+
+- `page`
+- `page_size`
+- `status` admin/super admin only
+- `department`
+- `village`
+- `search`
+
 ### `POST /api/schemes/`
 
 Creates a scheme.
 
 **Auth:** `admin`, `super_admin`
+
+**Content types**
+
+- `application/json`
+- `multipart/form-data`
+
+**Body fields**
+
+- `title`
+- `summary`
+- `description`
+- `department`
+- `status`
+- `eligibility` optional
+- `application_process` optional
+- `required_documents` optional list
+- `village_tags` optional list
+- `contact_person` optional
+- `contact_phone` optional
+- `contact_email` optional
+- `office_address` optional
+- `application_url` optional
+- `start_date` optional
+- `end_date` optional
+- `banner_image` optional image
+
+**JSON body without banner image**
+
+```json
+{
+  "title": "Rural Road Grant",
+  "summary": "Financial support for village road development.",
+  "description": "Scheme details and application guidance.",
+  "department": "Rural Development",
+  "status": "published",
+  "eligibility": "Village households and ward-level committees.",
+  "application_process": "Apply at the mandal office.",
+  "required_documents": ["ID proof", "Address proof"],
+  "village_tags": ["Village A"],
+  "contact_person": "Development Officer",
+  "contact_phone": "9876543210",
+  "contact_email": "officer@example.com",
+  "office_address": "Mandal office",
+  "application_url": "https://example.com/apply",
+  "start_date": "2026-06-10",
+  "end_date": "2026-12-31"
+}
+```
 
 ### `GET /api/schemes/{scheme_id}/`
 
@@ -748,6 +969,8 @@ Returns scheme detail.
 Updates a scheme.
 
 **Auth:** `admin`, `super_admin`
+
+Supports the same fields as scheme creation. `banner_image` is supported with `multipart/form-data`.
 
 ### `DELETE /api/schemes/{scheme_id}/`
 
@@ -858,6 +1081,10 @@ Uploads a single image to Cloudinary.
 - `image`
 - `folder`
 
+**Body type:** `multipart/form-data`
+
+**Example folders:** `complaints`, `progress`, `projects`, `feedback`, `schemes`, `identity-documents`, `general`.
+
 ### Supported folders
 
 - `complaints`
@@ -869,6 +1096,12 @@ Uploads a single image to Cloudinary.
 - `general`
 
 ## 22. Health
+
+### `GET /`
+
+Fast Render/liveness check. This endpoint does not require MongoDB and should return `200` when the web process is running.
+
+**Auth:** Public
 
 ### `GET /api/health/`
 
@@ -914,7 +1147,26 @@ Checks service and MongoDB connectivity.
 - invalid Cloudinary configuration returns image-upload validation errors
 - invalid dates, status values, or list shapes return serializer validation errors
 
-## 25. Recommended next enhancements
+## 25. Backend audit notes
+
+Latest audit checked:
+
+- route coverage in `village/urls.py` and `api/urls.py`
+- serializer request fields in `api/serializers.py`
+- role checks in `api/permissions.py` and endpoint views
+- Cloudinary image support in complaints, complaint progress, feedback, schemes, and generic uploads
+- Render liveness at `GET /` and Mongo readiness at `GET /api/health/`
+- production readiness files: `build.sh`, `Procfile`, `render.yaml`, `.python-version`
+
+Important implementation notes:
+
+- `super_admin` is treated as allowed by all role checks.
+- Root `GET /` intentionally does not ping MongoDB so Render health checks remain stable.
+- `/api/health/` does ping MongoDB and may return `503` if Atlas/network credentials are unavailable.
+- Complaint and feedback image inputs require `multipart/form-data`.
+- Project progress currently stores text/status/risk updates, not direct image files.
+
+## 26. Recommended next enhancements
 
 - add automated pytest API tests
 - add Swagger or ReDoc generation

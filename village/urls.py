@@ -1,8 +1,8 @@
 from django.urls import include, path
 
-from api.views.health import HealthCheckView
+from api.views.health import RootHealthCheckView
 
 urlpatterns = [
-    path("", HealthCheckView.as_view(), name="root-health"),
+    path("", RootHealthCheckView.as_view(), name="root-health"),
     path("api/", include("api.urls")),
 ]
